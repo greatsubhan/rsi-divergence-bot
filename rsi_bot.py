@@ -329,6 +329,17 @@ class RSIDivergenceBot:
         
         total_pairs = 0
         alerts_sent = 0
+        successful_fetches = 0
+        failed_fetches = 0
+        
+        # Send scan start message
+        start_embed = discord.Embed(
+            title="🔍 RSI Divergence Scan Started",
+            description="Scanning all pairs with Yahoo Finance...",
+            color=0x0099ff,
+            timestamp=datetime.utcnow()
+        )
+        scan_message = await channel.send(embed=start_embed)
         
         for category, config in TRADING_PAIRS.items():
             timeframe = config['timeframe']
@@ -339,8 +350,10 @@ class RSIDivergenceBot:
                     # Check cooldown
                     last_alert_time = self.last_alerts.get(symbol, datetime.min)
                     if datetime.now() - last_alert_time < timedelta(minutes=30):
+                        logger.info(f"Skipping {symbol} - still in cooldown")
                         continue
                     
+                    logger.info(f"Analyzing {symbol} ({yahoo_symbol})")
                     analysis = await self.analyze_pair(symbol, yahoo_symbol, timeframe)
                     
                     if analysis:
@@ -349,16 +362,112 @@ class RSIDivergenceBot:
                         
                         self.last_alerts[symbol] = datetime.now()
                         alerts_sent += 1
-                        logger.info(f"Alert sent for {symbol}")
+                        logger.info(f"🚨 Alert sent for {symbol}")
+                        successful_fetches += 1
+                    else:
+                        logger.info(f"✅ {symbol} - No divergence detected")
+                        successful_fetches += 1
                     
                     # Small delay to be respectful
                     await asyncio.sleep(0.5)
                     
                 except Exception as e:
-                    logger.error(f"Error analyzing {symbol}: {e}")
+                    logger.error(f"❌ Error analyzing {symbol}: {e}")
+                    failed_fetches += 1
                     continue
         
-        logger.info(f"Scan complete: {total_pairs} pairs checked, {alerts_sent} alerts sent")
+        # Send scan complete message with details
+        complete_embed = discord.Embed(
+            title="✅ RSI Divergence Scan Complete",
+            color=0x00ff00,
+            timestamp=datetime.utcnow()
+        )
+        
+        complete_embed.add_field(
+            name="📊 Scan Results",
+            value=f"**Total Pairs:** {total_pairs}\n"
+                  f"**Successful:** {successful_fetches}\n" 
+                  f"**Failed:** {failed_fetches}\n"
+                  f"**Alerts Sent:** {alerts_sent}",
+            inline=True
+        )
+        
+        complete_embed.add_field(
+            name="📈 Data Quality",
+            value=f"**Success Rate:** {(successful_fetches/total_pairs*100):.1f}%\n"
+                  f"**API Source:** Yahoo Finance\n"
+                  f"**Next Scan:** 10 minutes",
+            inline=True
+        )
+        
+        if alerts_sent == 0:
+            complete_embed.add_field(
+                name="🎯 No Divergences Found",
+                value="This is normal! RSI divergences are rare patterns.\n"
+                      "The bot will alert you when significant divergences occur.",
+                inline=False
+            )
+        
+        # Update the original scan message
+        await scan_message.edit(embed=complete_embed)
+        
+        logger.info(f"Scan complete: {total_pairs} pairs checked, {successful_fetches} successful, {alerts_sent} alerts sent")
+
+@bot.command(name='test')
+async def test_alert(ctx):
+    """Test alert functionality"""
+    # Create a fake divergence for testing
+    test_analysis = {
+        'symbol': 'EURUSD',
+        'timeframe': '5m',
+        'current_price': 1.0850,
+        'current_rsi': 32.5,
+        'divergences': {
+            'bullish': [{'type': 'bullish', 'strength': 15.2}],
+            'bearish': []
+        },
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    embed = scanner.create_alert_embed(test_analysis)
+    await ctx.send("🧪 **TEST ALERT** - This is what a real divergence looks like:")
+    await ctx.send(embed=embed)
+
+@bot.command(name='datacheck')
+async def data_quality_check(ctx):
+    """Check if we're getting good data from Yahoo Finance"""
+    await ctx.send("📊 Checking data quality from Yahoo Finance...")
+    
+    # Test a few major pairs
+    test_pairs = [
+        ('EURUSD', 'EURUSD=X'),
+        ('GBPUSD', 'GBPUSD=X'), 
+        ('USDJPY', 'USDJPY=X')
+    ]
+    
+    results = []
+    
+    for symbol, yahoo_symbol in test_pairs:
+        try:
+            data = await market_provider.get_intraday_data(symbol, yahoo_symbol, '5m')
+            if data:
+                data_points = len(data)
+                latest_time = max(data.keys()) if data else "No data"
+                results.append(f"✅ **{symbol}**: {data_points} points, latest: {latest_time}")
+            else:
+                results.append(f"❌ **{symbol}**: No data received")
+        except Exception as e:
+            results.append(f"❌ **{symbol}**: Error - {str(e)}")
+    
+    embed = discord.Embed(
+        title="📊 Data Quality Check Results",
+        description="\n".join(results),
+        color=0x0099ff,
+        timestamp=datetime.utcnow()
+    )
+    
+    await ctx.send(embed=embed)
+
 
 # Initialize components
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
