@@ -1,12 +1,11 @@
 import discord
 from discord.ext import commands, tasks
+import requests
+import json
+from datetime import datetime, timedelta
 import yfinance as yf
-import asyncio
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-import json
-import os
 from typing import Dict, List, Tuple, Optional
 import logging
 from dotenv import load_dotenv
@@ -398,38 +397,106 @@ class EnhancedSignalGenerator:
             else:
                 return "1:1.5"  # Fair R:R
 
-class YahooFinanceProvider:
+class ImprovedYahooFinanceProvider:
     def __init__(self):
-        """No API key needed for Yahoo Finance!"""
-        pass
+        """Enhanced Yahoo Finance provider with error handling"""
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
     
     async def get_intraday_data(self, symbol: str, yahoo_symbol: str, interval: str) -> Optional[Dict]:
-        """Fetch intraday data from Yahoo Finance"""
+        """Fetch intraday data with improved error handling"""
         try:
             logger.info(f"Fetching data for {symbol} ({yahoo_symbol}) - {interval}")
             
-            # Get data from Yahoo Finance
-            ticker = yf.Ticker(yahoo_symbol)
-            
-            # Get last 2 days of data to ensure we have enough
-            data = ticker.history(period='2d', interval=interval)
-            
-            if data.empty:
-                logger.warning(f"No data found for {yahoo_symbol}")
-                return None
-            
-            # Convert to our expected format
-            converted_data = {}
-            for timestamp, row in data.iterrows():
-                converted_data[timestamp.strftime('%Y-%m-%d %H:%M:%S')] = {
-                    '4. close': str(row['Close'])
-                }
-            
-            logger.info(f"Retrieved {len(converted_data)} data points for {symbol}")
-            return converted_data
+            # Method 1: Try yfinance with no caching
+            try:
+                ticker = yf.Ticker(yahoo_symbol)
+                # Disable caching to avoid SQLite issues
+                data = ticker.history(
+                    period='2d', 
+                    interval=interval,
+                    prepost=False,
+                    auto_adjust=True,
+                    back_adjust=False,
+                    proxy=None,
+                    rounding=False,
+                    tz=None,
+                    timeout=10
+                )
+                
+                if not data.empty:
+                    converted_data = {}
+                    for timestamp, row in data.iterrows():
+                        converted_data[timestamp.strftime('%Y-%m-%d %H:%M:%S')] = {
+                            '4. close': str(row['Close'])
+                        }
+                    
+                    if len(converted_data) > 10:  # Ensure we have enough data
+                        logger.info(f"✅ Retrieved {len(converted_data)} data points for {symbol}")
+                        return converted_data
+                    
+            except Exception as yf_error:
+                logger.warning(f"yfinance failed for {symbol}: {yf_error}")
+                
+            # Method 2: Fallback to direct Yahoo Finance API
+            return await self._fallback_yahoo_api(symbol, yahoo_symbol, interval)
             
         except Exception as e:
-            logger.error(f"Error fetching data for {symbol}: {e}")
+            logger.error(f"All methods failed for {symbol}: {e}")
+            return None
+    
+    async def _fallback_yahoo_api(self, symbol: str, yahoo_symbol: str, interval: str) -> Optional[Dict]:
+        """Fallback method using direct Yahoo Finance API"""
+        try:
+            # Convert interval format
+            interval_map = {'5m': '5m', '15m': '15m', '1h': '1h'}
+            api_interval = interval_map.get(interval, '5m')
+            
+            # Calculate time range
+            end_time = int(datetime.now().timestamp())
+            start_time = int((datetime.now() - timedelta(days=2)).timestamp())
+            
+            # Yahoo Finance API URL
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+            params = {
+                'period1': start_time,
+                'period2': end_time,
+                'interval': api_interval,
+                'includePrePost': 'false',
+                'events': 'div%2Csplits'
+            }
+            
+            response = self.session.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if 'chart' in data and data['chart']['result']:
+                    result = data['chart']['result'][0]
+                    
+                    if 'timestamp' in result and 'indicators' in result:
+                        timestamps = result['timestamp']
+                        closes = result['indicators']['quote'][0]['close']
+                        
+                        converted_data = {}
+                        for i, (ts, close_price) in enumerate(zip(timestamps, closes)):
+                            if close_price is not None:  # Filter out None values
+                                dt = datetime.fromtimestamp(ts)
+                                converted_data[dt.strftime('%Y-%m-%d %H:%M:%S')] = {
+                                    '4. close': str(close_price)
+                                }
+                        
+                        if len(converted_data) > 10:
+                            logger.info(f"✅ Fallback API: Retrieved {len(converted_data)} data points for {symbol}")
+                            return converted_data
+                        
+            logger.warning(f"Fallback API failed for {symbol}: {response.status_code}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Fallback API error for {symbol}: {e}")
             return None
 
 class EnhancedTradingBot:
@@ -638,7 +705,7 @@ class EnhancedTradingBot:
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))
 
-market_provider = YahooFinanceProvider()
+market_provider = ImprovedYahooFinanceProvider()
 enhanced_scanner = EnhancedTradingBot(market_provider, CHANNEL_ID)
 
 @bot.event
