@@ -376,12 +376,12 @@ class EnhancedSignalGenerator:
                     'current': rsi,
                     'divergence_type': 'bullish' if divergences['bullish'] else 'bearish'
                 },
-                'risk_reward_ratio': self._calculate_risk_reward(signal_type, alligator, rsi)
+                'risk_reward_ratio': self.calculate_risk_reward(signal_type, alligator, rsi)  # Fixed method name
             }
         
         return None
     
-    def _calculate_risk_reward_ratio(self, signal_type: str, alligator: Dict, rsi: float) -> str:
+    def calculate_risk_reward(self, signal_type: str, alligator: Dict, rsi: float) -> str:  # Fixed method name
         """Calculate estimated risk/reward based on conditions"""
         if signal_type == "BUY":
             if alligator['state'] == 'hunting_up' and rsi < 30:
@@ -923,6 +923,244 @@ async def enhanced_data_quality_check(ctx):
     )
     
     await ctx.send(embed=embed)
+
+# Add this debug command to your enhanced bot
+
+@bot.command(name='debug')
+async def debug_analysis(ctx):
+    """Debug why no signals are being generated"""
+    await ctx.send("Analyzing EURUSD in detail...")
+    try:
+        data = await market_provider.get_intraday_data('EURUSD', 'EURUSD=X', '5m')
+        prices = [float(ohlcv['4. close']) for timestamp, ohlcv in sorted(data.items())]
+        rsi_values = enhanced_scanner.signal_generator.rsi_calculator.calculate_rsi(prices)
+        alligator_data = enhanced_scanner.signal_generator.alligator.calculate_alligator(prices)
+        await ctx.send(f"RSI: {rsi_values[-1]:.2f}")
+        await ctx.send(f"Alligator State: {alligator_data['state']}")
+        await ctx.send(f"This is why no signal: Market is {alligator_data['state']}")
+    except Exception as e:
+        await ctx.send(f"Debug error: {str(e)}")
+
+@bot.command(name='forcesignal')
+async def force_signal_test(ctx):
+    """Generate signals with relaxed conditions for testing"""
+    await ctx.send("🧪 **TESTING WITH RELAXED CONDITIONS**")
+    
+    signals_found = 0
+    
+    # Test a few major pairs with relaxed conditions
+    test_pairs = [
+        ('EURUSD', 'EURUSD=X', '5m'),
+        ('GBPUSD', 'GBPUSD=X', '5m'),
+        ('USDJPY', 'USDJPY=X', '5m')
+    ]
+    
+    for symbol, yahoo_symbol, timeframe in test_pairs:
+        try:
+            data = await market_provider.get_intraday_data(symbol, yahoo_symbol, timeframe)
+            if not data or len(data) < 50:
+                continue
+                
+            prices = [float(ohlcv['4. close']) for timestamp, ohlcv in sorted(data.items())]
+            rsi_values = enhanced_scanner.signal_generator.rsi_calculator.calculate_rsi(prices)
+            alligator_data = enhanced_scanner.signal_generator.alligator.calculate_alligator(prices)
+            divergences = enhanced_scanner.signal_generator.divergence_detector.detect_divergence(prices, rsi_values)
+            
+            current_rsi = rsi_values[-1]
+            current_price = prices[-1]
+            
+            # RELAXED CONDITIONS FOR TESTING
+            signal_generated = False
+            
+            # Generate BUY signal with relaxed conditions
+            if (divergences['bullish'] or current_rsi < 35) and alligator_data['state'] != 'hunting_down':
+                test_analysis = {
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'current_price': current_price,
+                    'signal_data': {
+                        'signal_type': 'BUY',
+                        'signal_strength': 3,  # Medium strength for testing
+                        'confluence_factors': [
+                            f"RSI: {current_rsi:.1f}" + (" (Oversold)" if current_rsi < 35 else ""),
+                            f"Alligator: {alligator_data['state'].replace('_', ' ').title()}",
+                            f"Price Position: {alligator_data['price_vs_alligator'].replace('_', ' ').title()}",
+                            "TESTING MODE - Relaxed Conditions"
+                        ],
+                        'alligator_data': alligator_data,
+                        'rsi_data': {
+                            'current': current_rsi,
+                            'divergence_type': 'bullish' if divergences['bullish'] else 'none'
+                        },
+                        'risk_reward_ratio': '1:2'
+                    },
+                    'timestamp': sorted(data.keys())[-1]
+                }
+                
+                embed = enhanced_scanner.create_enhanced_alert_embed(test_analysis)
+                await ctx.send(f"🧪 **TEST SIGNAL GENERATED:**")
+                await ctx.send(embed=embed)
+                signals_found += 1
+                signal_generated = True
+            
+            # Generate SELL signal with relaxed conditions
+            elif (divergences['bearish'] or current_rsi > 65) and alligator_data['state'] != 'hunting_up':
+                test_analysis = {
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'current_price': current_price,
+                    'signal_data': {
+                        'signal_type': 'SELL',
+                        'signal_strength': 3,
+                        'confluence_factors': [
+                            f"RSI: {current_rsi:.1f}" + (" (Overbought)" if current_rsi > 65 else ""),
+                            f"Alligator: {alligator_data['state'].replace('_', ' ').title()}",
+                            f"Price Position: {alligator_data['price_vs_alligator'].replace('_', ' ').title()}",
+                            "TESTING MODE - Relaxed Conditions"
+                        ],
+                        'alligator_data': alligator_data,
+                        'rsi_data': {
+                            'current': current_rsi,
+                            'divergence_type': 'bearish' if divergences['bearish'] else 'none'
+                        },
+                        'risk_reward_ratio': '1:2'
+                    },
+                    'timestamp': sorted(data.keys())[-1]
+                }
+                
+                embed = enhanced_scanner.create_enhanced_alert_embed(test_analysis)
+                await ctx.send(f"🧪 **TEST SIGNAL GENERATED:**")
+                await ctx.send(embed=embed)
+                signals_found += 1
+                signal_generated = True
+            
+            if not signal_generated:
+                await ctx.send(f"📊 {symbol}: RSI {current_rsi:.1f}, Alligator {alligator_data['state']} - No signal conditions met even with relaxed rules")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Error testing {symbol}: {str(e)}")
+    
+    if signals_found == 0:
+        await ctx.send("🤔 **RESULT:** Even with relaxed conditions, current market state shows no clear signals. This indicates markets are in consolidation/ranging phase.")
+
+# Fix the _calculate_risk_reward error
+class EnhancedSignalGenerator:
+    def __init__(self):
+        self.rsi_calculator = RSICalculator()
+        self.alligator = AlligatorIndicator()
+        self.divergence_detector = DivergenceDetector()
+    
+    def generate_trading_signal(self, prices: List[float], rsi_values: List[float]) -> Optional[Dict]:
+        """Generate BUY/SELL signals based on RSI + Alligator confluence"""
+        
+        if len(prices) < 50 or len(rsi_values) < 20:
+            return None
+        
+        # Calculate indicators
+        current_price = prices[-1]
+        current_rsi = rsi_values[-1]
+        alligator_data = self.alligator.calculate_alligator(prices)
+        divergences = self.divergence_detector.detect_divergence(prices, rsi_values)
+        
+        if not alligator_data:
+            return None
+        
+        # Generate signal based on confluence
+        signal = self._evaluate_signal_conditions(
+            current_price, current_rsi, divergences, alligator_data
+        )
+        
+        return signal
+    
+    def _evaluate_signal_conditions(self, price: float, rsi: float, divergences: Dict, alligator: Dict) -> Optional[Dict]:
+        """Evaluate all conditions for signal generation"""
+        
+        signal_type = None
+        signal_strength = 0
+        confluence_factors = []
+        
+        # Check for BULLISH signals
+        if divergences['bullish']:
+            confluence_factors.append("RSI Bullish Divergence")
+            
+            # Strong bullish conditions
+            if (alligator['state'] in ['hunting_up', 'awakening_up'] and 
+                alligator['price_vs_alligator'] in ['above_lips', 'above_all'] and
+                rsi < 50):  # RSI still has room to go up
+                
+                signal_type = "BUY"
+                signal_strength = 5 if alligator['state'] == 'hunting_up' else 4
+                confluence_factors.extend([
+                    f"Alligator {alligator['state'].replace('_', ' ').title()}",
+                    f"Price {alligator['price_vs_alligator'].replace('_', ' ')}",
+                    f"RSI oversold zone ({rsi:.1f})"
+                ])
+            
+            # Medium bullish conditions
+            elif alligator['state'] not in ['sleeping', 'hunting_down']:
+                signal_type = "BUY"
+                signal_strength = 3
+                confluence_factors.append(f"Alligator not bearish ({alligator['state']})")
+        
+        # Check for BEARISH signals
+        elif divergences['bearish']:
+            confluence_factors.append("RSI Bearish Divergence")
+            
+            # Strong bearish conditions
+            if (alligator['state'] in ['hunting_down', 'awakening_down'] and 
+                alligator['price_vs_alligator'] in ['below_lips', 'below_all'] and
+                rsi > 50):  # RSI still has room to go down
+                
+                signal_type = "SELL"
+                signal_strength = 5 if alligator['state'] == 'hunting_down' else 4
+                confluence_factors.extend([
+                    f"Alligator {alligator['state'].replace('_', ' ').title()}",
+                    f"Price {alligator['price_vs_alligator'].replace('_', ' ')}",
+                    f"RSI overbought zone ({rsi:.1f})"
+                ])
+            
+            # Medium bearish conditions
+            elif alligator['state'] not in ['sleeping', 'hunting_up']:
+                signal_type = "SELL"
+                signal_strength = 3
+                confluence_factors.append(f"Alligator not bullish ({alligator['state']})")
+        
+        # No signal if Alligator is sleeping (ranging market)
+        if alligator['state'] == 'sleeping':
+            return None
+        
+        # Return signal if conditions met
+        if signal_type and signal_strength >= 3:
+            return {
+                'signal_type': signal_type,
+                'signal_strength': signal_strength,
+                'confluence_factors': confluence_factors,
+                'alligator_data': alligator,
+                'rsi_data': {
+                    'current': rsi,
+                    'divergence_type': 'bullish' if divergences['bullish'] else 'bearish'
+                },
+                'risk_reward_ratio': self.calculate_risk_reward(signal_type, alligator, rsi)  # Fixed method name
+            }
+        
+        return None
+    
+    def calculate_risk_reward(self, signal_type: str, alligator: Dict, rsi: float) -> str:  # Fixed method name
+        """Calculate estimated risk/reward based on conditions"""
+        if signal_type == "BUY":
+            if alligator['state'] == 'hunting_up' and rsi < 30:
+                return "1:3"  # Excellent R:R
+            elif alligator['state'] == 'awakening_up' and rsi < 40:
+                return "1:2"  # Good R:R
+            else:
+                return "1:1.5"  # Fair R:R
+        else:  # SELL
+            if alligator['state'] == 'hunting_down' and rsi > 70:
+                return "1:3"  # Excellent R:R
+            elif alligator['state'] == 'awakening_down' and rsi > 60:
+                return "1:2"  # Good R:R
+            else:
+                return "1:1.5"  # Fair R:R
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
